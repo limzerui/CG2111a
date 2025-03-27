@@ -33,19 +33,6 @@ volatile uint16_t pulse_width = 0;
 volatile bool pulse_measured = false;
 volatile bool waiting_for_falling = true;
 
-// Add a function to get elapsed time based on Timer1
-unsigned long micros_timer1() {
-  // Timer1 is running with prescaler 8, so each tick is 0.5 microseconds
-  // Multiply by 0.5 to get microseconds
-  return (unsigned long)(TCNT1) * 0.5;
-}
-
-// Calculate a timeout in Timer1 ticks (at 0.5us per tick)
-uint16_t timeout_ticks(unsigned long milliseconds) {
-  // Convert milliseconds to Timer1 ticks (1ms = 2000 ticks at 0.5us per tick)
-  return milliseconds * 2000;
-}
-
 ISR(INT1_vect) {
   if (waiting_for_falling) {
     if (!(SENSOR_PIN & (1 << SENSOR_BIT))) {
@@ -95,21 +82,18 @@ float getPulsePeriod(void) {
   uint16_t start_ticks = TCNT1;  // Use Timer1 directly
   
   // Wait for pulse to be measured or timeout after 100ms
-  while (!pulse_measured) {
-    uint16_t current_ticks = TCNT1;
-    uint16_t elapsed;
+  // 100ms = 200,000 ticks at 0.5us per tick
+  const uint16_t MAX_WAIT_TICKS = 32768; // Stay within 16-bit range and check multiple times
+  
+  for (uint8_t timeoutCounter = 0; timeoutCounter < 7 && !pulse_measured; timeoutCounter++) {
+    uint16_t timeout_end = start_ticks + MAX_WAIT_TICKS;
     
-    // Handle timer overflow
-    if (current_ticks < start_ticks) {
-      elapsed = (65535 - start_ticks) + current_ticks;
-    } else {
-      elapsed = current_ticks - start_ticks;
+    // Simple timeout check that handles overflow
+    while (((uint16_t)TCNT1 != timeout_end) && !pulse_measured) {
+      // Just waiting
     }
     
-    // Check if we've exceeded 100ms timeout (200,000 timer ticks at 0.5us per tick)
-    if (elapsed > 200000) {
-      break;
-    }
+    start_ticks = TCNT1; // Update for next iteration
   }
   
   if (!pulse_measured || pulse_width == 0) return 0;
