@@ -33,9 +33,17 @@ volatile uint16_t pulse_width = 0;
 volatile bool pulse_measured = false;
 volatile bool waiting_for_falling = true;
 
-ISR(TIMER0_COMPA_vect) {
-  // Use Arduino's millis() instead of our own counter
-  // This ISR is kept empty as we'll rely on Arduino's timer functions
+// Add a function to get elapsed time based on Timer1
+unsigned long micros_timer1() {
+  // Timer1 is running with prescaler 8, so each tick is 0.5 microseconds
+  // Multiply by 0.5 to get microseconds
+  return (unsigned long)(TCNT1) * 0.5;
+}
+
+// Calculate a timeout in Timer1 ticks (at 0.5us per tick)
+uint16_t timeout_ticks(unsigned long milliseconds) {
+  // Convert milliseconds to Timer1 ticks (1ms = 2000 ticks at 0.5us per tick)
+  return milliseconds * 2000;
 }
 
 ISR(INT1_vect) {
@@ -79,15 +87,29 @@ void setFilter(bool s2, bool s3) {
   else
     S3_PORT &= ~(1 << S3_BIT);
     
-  _delay_ms(50);
+  _delay_ms(50);  // Use _delay_ms which doesn't depend on timers
 }
 
 float getPulsePeriod(void) {
   pulse_measured = false;
-  unsigned long start_wait = millis();  // Using Arduino's millis() function
+  uint16_t start_ticks = TCNT1;  // Use Timer1 directly
   
-  while (!pulse_measured && (millis() - start_wait < 100)) {
-    // Wait for pulse to be measured or timeout
+  // Wait for pulse to be measured or timeout after 100ms
+  while (!pulse_measured) {
+    uint16_t current_ticks = TCNT1;
+    uint16_t elapsed;
+    
+    // Handle timer overflow
+    if (current_ticks < start_ticks) {
+      elapsed = (65535 - start_ticks) + current_ticks;
+    } else {
+      elapsed = current_ticks - start_ticks;
+    }
+    
+    // Check if we've exceeded 100ms timeout (200,000 timer ticks at 0.5us per tick)
+    if (elapsed > 200000) {
+      break;
+    }
   }
   
   if (!pulse_measured || pulse_width == 0) return 0;
@@ -98,21 +120,16 @@ float getPulsePeriod(void) {
 }
 
 uint8_t detectColor(float red, float green, float blue) {
-  // Higher period means lower frequency which means less light reflected
-  
-  // If any reading is too small (meaning too high frequency or too bright reflection)
-  // or too large (meaning sensor error or very dark)
+  // If any reading is too small or too large
   if (red < 0.01 || green < 0.01 || blue < 0.01 || 
       red > 10 || green > 10 || blue > 10) {
     return COLOR_UNCERTAIN;
   }
   
   // For period, higher values mean less light, so we want to look for the smallest period
-  // Red object will reflect more red light = smaller red period
   if (red < green * 0.7 && red < blue * 0.7) {
     return COLOR_RED;
   }
-  // Green object will reflect more green light = smaller green period
   else if (green < red * 0.7 && green < blue * 0.7) {
     return COLOR_GREEN;
   }
@@ -137,7 +154,7 @@ void setup(void) {
   setupTimer1();
   setupInterrupt();
   
-  Serial.println("Color sensor initialized");
+  Serial.println("Color sensor initialized (single timer version)");
 }
 
 void loop(void) {
@@ -174,5 +191,6 @@ void loop(void) {
     Serial.println(" - UNCERTAIN");
   }
   
+  // Use _delay_ms which doesn't rely on timers for timing
   _delay_ms(500);
 } 
