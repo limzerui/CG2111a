@@ -21,11 +21,11 @@
 #define SENSOR_PIN PIND
 #define SENSOR_BIT 1
 
-AF_DCMotor right(1), left(4);
+volatile unsigned long lastSendTime = 0;
+volatile uint8_t receivedData = 0;
+const unsigned long SEND_INTERVAL = 1000; // 1 second
 
-#define DEFAULT_SPEED 150
-
-bool isClawOpen = false; // Assume starts closed
+AF_DCMotor right(1), left(2);
 
 void translate(bool direction, int speed) {
   right.run(direction ? FORWARD : BACKWARD);
@@ -49,7 +49,7 @@ void stop() {
 volatile unsigned int lastEdge, pulse, green, red, state, edges;
 
 ISR(INT1_vect) {
-  unsigned int currentEdge = TCNT4;
+  unsigned int currentEdge = millis();
   long delta = currentEdge - lastEdge;
 
   if (delta < 0)
@@ -61,35 +61,27 @@ ISR(INT1_vect) {
   edges++;
 }
 
-ISR(TIMER3_COMPA_vect) {
-  bool greenStatusUpdated = false;
+ISR(TIMER4_COMPA_vect) {
   switch (state) {
-    case 0: // Just finished reading red, starting green measurement
-      if (edges >= 3)
-        red = pulse;
-      else
-        red = 20000;
-      setFilter(1, 1);
-           break;
-
-    case 1: 
+    case 0:
       if (edges >= 3)
         green = pulse;
       else
         green = 20000;
-      setFilter(0, 0); // Set filter for RED
-      greenStatusUpdated = true; // Green/Red values are now updated
+      setFilter(1,1);
+      break;
+
+    case 1:
+      if (edges >= 3)
+        red = pulse;
+      else
+        red = 20000;
+      setFilter(0, 0);
       break;
   }
 
   edges = 0;
   state = (state + 1) % 2;
-
-  // Send status update AFTER both colors have been measured (when state flips back to 0)
-  if (greenStatusUpdated) {
-    bool isGreenDominant = (green < red);
-    Serial3.write(isGreenDominant ? '1' : '0'); // Send '1' for green, '0' for red/equal
-  }
 }
 
 // volatile unsigned long leftTicks = 0, rightTicks = 0;
@@ -116,7 +108,55 @@ void setFilter(bool s2, bool s3) {
     S3_PORT &= ~(1 << S3_BIT);
 }
 
+// ISR(USART3_RX_vect){
+//   uint8_t cmd = UDR3;
+//   switch (cmd) {
+//     case 0x01:
+//       translate(true, 180);
+//       break;
+//     case 0x02:
+//       stop();
+//       break;
+//     case 0x03:
+//       rotate(true, 180);
+//       break;
+//     case 0x04:
+//       rotate(false, 180);
+//       break;
+//     case 0x05:
+//       translate(false, 180);
+//       break;
+//     default:
+//       // Unrecognized command – optionally handle error.
+//       break;
+//   }
+
+  // Serial.println(cmd, DEC);
+
+  // uint8_t colorResponse = getColorStatus();  // lower 2 bits indicate sensor state
+  // uint8_t responseByte = colorResponse & 0x03; // mask to only 2 bits
+  
+  // Wait until the transmit buffer is empty, then send the response.
+  // while (!(UCSR3A & (1 << UDRE3))) ;  // Wait for UDRE flag
+  // UDR3 = responseByte;
+  // UCSR3B |= 0b00001000;
+// }
+
+uint8_t getColorStatus() {
+  const unsigned int threshold = 18000; // Adjust threshold as needed
+  // Lower pulse value means stronger detection.
+  if ((green < threshold) && (green < red)) {
+    return 0b01; // Green detected
+  } else if ((red < threshold) && (red < green)) {
+    return 0b00; // Red detected
+  } else {
+    return 0b10; // Black or no significant color detected
+  }
+}
+
 void setup() {
+  Serial3.begin(115200);
+
   cli();
 
   //set up encoder and col. sensor pin interrupts
@@ -143,16 +183,15 @@ void setup() {
   S1_PORT |= (1 << S1_BIT);
 
   //set Timer3 to trigger every 10ms
-  TCCR3A = 0b00000000;
-  TCCR3B = 0b00001010;
-  TIMSK3 = 0b00000011;
-  OCR3A = 20000;
-  TCNT3 = 0;
-
-  //set Timer4 to count at 2Mhz
   TCCR4A = 0b00000000;
-  TCCR4B = 0b00000010;
+  TCCR4B = 0b00001010;
+  TIMSK4 = 0b00000011;
+  OCR4A = 20000;
   TCNT4 = 0;
+  //set Timer4 to count at 2Mhz
+  // TCCR4A = 0b00000000;
+  // TCCR4B = 0b00000010;
+  // TCNT4 = 0;
 
   //set Timer5 interrupts for PWM pins in Phase-Correct PWM Mode
   TCCR5A = 0b10101000;  //Clock Prescaler: 8
@@ -162,98 +201,85 @@ void setup() {
   OCR5B = 1500;   //Left Claw Arm
   OCR5C = 1500;   //Right Claw Arm
 
-  //Activate Serial RX Interrupts (7N1)
-
-
-  //Activate Serial TX Interrupts (Transmit Colour Sensor data)
-
-  // Setup Serial3 for Raspberry Pi communication
-  // Baud rate: 9600 (ensure RPi matches)
-  // Config: SERIAL_7N1 means 7 data bits, No parity, 1 stop bit
-  Serial3.begin(9600, SERIAL_7N1);
-
-  // Keep Serial (USB) for debugging if needed
-  Serial.begin(9600); 
-
+  // UCSR3C = 0b00000110;
+  // unsigned int b;
+  // b = (unsigned int) round(F_CPU / (16.0 * 115200)) - 1;
+  // UBRR3H = (unsigned char) (b >> 8);
+  // UBRR3L = (unsigned char) b;
+  // UCSR3B |= 0b10010000;
+  
   sei();
-
-  Serial.println("Setup Complete. Serial3 configured for 7N1 communication.");
-  // Initialize claw to a known state (e.g., closed)
-  closeClaw();
-  isClawOpen = false;
+  // Serial.begin(115200);
 }
 
+
+// void handleSerialSend() {
+//   unsigned long currentTime = millis();
+  
+//   // Check if it's time to send data
+//   if (currentTime - lastSendTime >= SEND_INTERVAL) {
+//     Serial3.write(1);
+//     Serial.println("Sent '1' via Serial3");
+//     lastSendTime = currentTime;
+//   }
+// }
+
+// Function to check for incoming data - call this in your loop()
+// void handleSerialReceive() {
+//   if (Serial3.available() > 0) {
+//     // Read the incoming byte
+//     receivedData = Serial3.read();
+    
+//     // Print to main serial for debugging
+//     Serial.print("Received data: ");
+//     Serial.println(receivedData + '0');
+//   }
+// }
+
 void openClaw() {
-  OCR5B = 1000;
+  OCR5B = 1100;
   OCR5C = 2000;
 }
 
 void closeClaw() {
-  OCR5B = 1420;
-  OCR5C = 1580;
+  OCR5B = 1600;
+  OCR5C = 1500;
 }
 
 void keepMedpack() {
   OCR5A = 1650;
 }
 
+
 void releaseMedpack() {
   OCR5A = 1050;
 }
 
 void loop() {
-  // Check for incoming commands from Raspberry Pi via Serial3
-  if (Serial3.available() > 0) {
-    // Read the incoming byte (7 data bits)
-    byte receivedData = Serial3.read();
 
-    // Extract the lower 3 bits for the command
-    // Use bitwise AND with 0x07 (binary 00000111)
-    byte command = receivedData & 0x07;
+  bool isGreen = green > red;
+  // handleSerialSend();
+  // handleSerialReceive();
 
-    // Debugging: Print received data and command
-    // Serial.print("Received Byte: "); Serial.print(receivedData, BIN);
-    // Serial.print(" | Extracted Command: "); Serial.println(command, BIN);
 
-    // Execute command based on the 3-bit value
-    switch (command) {
-      case 0: // 000: Stop
-        Serial.println("Command: Stop");
-        stop();
-        break;
-      case 1: // 001: Forward
-        Serial.println("Command: Forward");
-        translate(true, DEFAULT_SPEED); // true for FORWARD
-        break;
-      case 2: // 010: Reverse
-        Serial.println("Command: Reverse");
-        translate(false, DEFAULT_SPEED); // false for BACKWARD
-        break;
-      case 3: // 011: Left
-        Serial.println("Command: Left");
-        rotate(false, DEFAULT_SPEED); // false for Left turn
-        break;
-      case 4: // 100: Right
-        Serial.println("Command: Right");
-        rotate(true, DEFAULT_SPEED); // true for Right turn
-        break;
-      case 5: // 101: Toggle Claw
-        Serial.println("Command: Toggle Claw");
-        if (isClawOpen) {
-          closeClaw();
-          isClawOpen = false;
-        } else {
-          openClaw();
-          isClawOpen = true;
-        }
-        break;
-     
-      default:
-        
-        Serial.print("Unknown command: "); Serial.println(command);
-        break;
-    }
-  }
+  // OCR5A = 1000;
+  // OCR5B = 1000;
+  // OCR5C = 1000;
+  // delay(2000);
+
+  // OCR5A = 2000;
+  // OCR5B = 2000;
+  // OCR5C = 2000;
+  // delay(2000);
+
+  // if (Serial.available() >= 3)
+  // {
+  //   int speed = (Serial.read() - '0') * 100;
+  //   speed += (Serial.read() - '0') * 10;
+  //   speed += (Serial.read() - '0') * 1;
+
+  //   translate(1, speed);
+  // }
 
   // keepMedpack();
   // delay(1000);
@@ -264,4 +290,35 @@ void loop() {
   // delay(2000);
   // closeClaw();
   // delay(2000);
+
+  if(Serial3.available()){
+    uint8_t cmd = Serial3.read();
+  }
+
+  switch (cmd) {
+    case 0x01:
+      translate(true, 255);
+      break;
+    case 0x02:
+      stop();
+      break;
+    case 0x03:
+      rotate(true, 255);
+      break;
+    case 0x04:
+      rotate(false, 255);
+      break;
+    case 0x05:
+      translate(false, 255);
+      break;
+    default:
+      // Unrecognized command – optionally handle error.
+      break;
+  }
+
+  uint8_t colorResponse = getColorStatus();  // lower 2 bits indicate sensor state
+  uint8_t responseByte = colorResponse & 0x03; // mask to only 2 bits
+  
+  Serial3.write(colorResponse);
+  delay(50);
 }
