@@ -21,41 +21,45 @@
 #define SENSOR_PIN PIND
 #define SENSOR_BIT 1
 
+volatile unsigned long lastSendTime = 0;
+volatile uint8_t receivedData = 0;
+const unsigned long SEND_INTERVAL = 1000;  // 1 second
+
 AF_DCMotor br(1), bl(2), fr(4), fl(3);
 
 void translate(bool direction, int speed) {
   br.run(direction ? FORWARD : BACKWARD);
   bl.run(direction ? BACKWARD : FORWARD);
-  // fr.run(direction ? FORWARD : BACKWARD);
-  // fl.run(direction ? BACKWARD : FORWARD);
-  analogWrite(11, speed);
-  analogWrite(3, speed);
-  // analogWrite(5, 0);
-  // analogWrite(6, 0);
+  fr.run(direction ? FORWARD : BACKWARD);
+  fl.run(direction ? BACKWARD : FORWARD);
+  br.setSpeed(speed);
+  bl.setSpeed(speed);
+  fr.setSpeed(speed);
+  fl.setSpeed(speed);
 }
 
 void rotate(bool direction, int speed) {
   br.run(direction ? FORWARD : BACKWARD);
   bl.run(direction ? FORWARD : BACKWARD);
-  // fr.run(direction ? FORWARD : BACKWARD);
-  // fl.run(direction ? FORWARD : BACKWARD);
-  analogWrite(11, speed);
-  analogWrite(3, speed);
-  // analogWrite(5, 0);
-  // analogWrite(6, 0);
+  fr.run(direction ? FORWARD : BACKWARD);
+  fl.run(direction ? FORWARD : BACKWARD);
+  br.setSpeed(speed);
+  bl.setSpeed(speed);
+  fr.setSpeed(speed);
+  fl.setSpeed(speed);
 }
 
 void stop() {
-  analogWrite(11, 0);
-  analogWrite(3, 0);
-  // analogWrite(5, 0);
-  // analogWrite(6, 0);
+  br.setSpeed(0);
+  bl.setSpeed(0);
+  fr.setSpeed(0);
+  fl.setSpeed(0);
 }
 
 volatile unsigned int lastEdge, pulse, green, red, state, edges;
 
 ISR(INT1_vect) {
-  unsigned int currentEdge = micros();
+  unsigned int currentEdge = 2000;
   long delta = currentEdge - lastEdge;
 
   if (delta < 0)
@@ -74,7 +78,7 @@ ISR(TIMER4_COMPA_vect) {
         green = pulse;
       else
         green = 3000;
-      setFilter(0, 0);
+      setFilter(1, 1);
       break;
 
     case 1:
@@ -82,7 +86,7 @@ ISR(TIMER4_COMPA_vect) {
         red = pulse;
       else
         red = 3000;
-      setFilter(1, 1);
+      setFilter(0, 0);
       break;
   }
 
@@ -103,7 +107,7 @@ void setFilter(bool s2, bool s3) {
 }
 
 uint8_t getColourStatus() {
-  const unsigned int threshold = 800;  // Adjust threshold as needed
+  const unsigned int threshold = 500;  // Adjust threshold as needed
   // Lower pulse value means stronger detection.
   if ((green < threshold) && (red < threshold) && (green < red)) {
     return 0b01;  // Green detected
@@ -135,9 +139,9 @@ void setup() {
   //set Timer4 to trigger every 10ms
   TCCR4A = 0b00000000;
   TCCR4B = 0b00001010;
+  TIMSK4 = 0b00000010;
   OCR4A = 20000;
   TCNT4 = 0;
-  TIMSK4 = 0b00000010;
 
   //set Timer5 interrupts for PWM pins in Phase-Correct PWM Mode
   TCCR5A = 0b10101000;  //Clock Prescaler: 8
@@ -150,16 +154,11 @@ void setup() {
   sei();
 
   setFilter(0, 0);
-  // Serial.begin(115200);
+  Serial.begin(115200);
   Serial2.begin(115200);
 
-  pinMode(11, OUTPUT);
-  pinMode(3, OUTPUT);
-  pinMode(5, OUTPUT);
-  pinMode(6, OUTPUT);
-
-  openClaw();
-  keepMedpack();
+  // openClaw();
+  // keepMedpack();
 }
 
 void openClaw() {
@@ -168,17 +167,17 @@ void openClaw() {
 }
 
 void closeClaw() {
-  OCR5B = 1800;
-  OCR5C = 1300;
+  OCR5B = 1600;
+  OCR5C = 1500;
 }
 
 void keepMedpack() {
-  OCR5A = 1050;
+  OCR5A = 1650;
 }
 
 
 void releaseMedpack() {
-  OCR5A = 1650;
+  OCR5A = 1050;
 }
 
 void loop() {
@@ -189,12 +188,16 @@ void loop() {
   // Serial.println(getColourStatus());
   // }
 
-  while (!Serial2.available()) {};
-  uint8_t cmd = Serial2.read();
+  // while (!Serial2.available()) {};
+  // uint8_t cmd = Serial2.read();
+
+  // Serial.println(cmd);
+
+  int cmd = 0;
   switch (cmd) {
-    case 0:
-      keepMedpack();
-      break;
+    // case 0:
+    //   releaseMedpack();
+    //   break;
     case 1:
       translate(true, 255);
       break;
@@ -210,21 +213,18 @@ void loop() {
     case 5:
       translate(false, 255);
       break;
-    case 6:
-      openClaw();
-      break;
-    case 7:
-      closeClaw();
-      break;
-    case 8:
-      releaseMedpack();
-      break;
+    // case 6:
+    //   openClaw();
+    //   break;
+    // case 7:
+    //   closeClaw();
+    //   break;
     default:
       break;
   }
 
-  uint8_t colorResponse = getColourStatus();    // lower 2 bits indicate sensor state
-  uint8_t responseByte = colorResponse & 0x03;  // mask to only 2 bits
+  // uint8_t colorResponse = getColourStatus();    // lower 2 bits indicate sensor state
+  // uint8_t responseByte = colorResponse & 0x03;  // mask to only 2 bits
 
-  Serial2.write(colorResponse);
+  // Serial2.write(colorResponse);
 }

@@ -185,7 +185,7 @@ void setup() {
   //set Timer3 to trigger every 10ms
   TCCR4A = 0b00000000;
   TCCR4B = 0b00001010;
-  TIMSK4 = 0b00000011;
+  TIMSK4 = 0b00000010;
   OCR4A = 20000;
   TCNT4 = 0;
   //set Timer4 to count at 2Mhz
